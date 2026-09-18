@@ -56,6 +56,8 @@ const languagesByExtension: Record<string, Language> = {
   svelte: language(svelteBaseParser.configure({ wrap: configureNesting(defaultNesting) })),
   // Astro
   astro: language(astroParser),
+  // Vue
+  vue: language(htmlParser),
   // XML
   xml: language(xmlParser),
   // Java
