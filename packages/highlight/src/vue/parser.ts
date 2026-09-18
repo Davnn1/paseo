@@ -94,12 +94,35 @@ function findClosingBrace(text: string, opening: number): number {
   return -1;
 }
 
+function findInterpolationEnd(text: string, start: number): number {
+  let depth = 0;
+  for (let position = start; position < text.length; position++) {
+    const code = text.charCodeAt(position);
+    if (code === 47 && text.charCodeAt(position + 1) === 47) {
+      position = skipLineComment(text, position);
+    } else if (code === 47 && text.charCodeAt(position + 1) === 42) {
+      position = skipBlockComment(text, position);
+    } else if (code === 47 && isRegexStart(text, position)) {
+      position = skipRegex(text, position);
+    } else if (code === 34 || code === 39 || code === 96) {
+      position = skipQuotedText(text, position);
+    } else if (code === 123) {
+      depth++;
+    } else if (code === 125 && depth === 0) {
+      if (text.charCodeAt(position + 1) === 125) return position;
+    } else if (code === 125) {
+      depth--;
+    }
+  }
+  return -1;
+}
+
 function findExpressions(text: string): Range[] {
   const ranges: Range[] = [];
   for (let position = 0; position < text.length; position++) {
     if (text.charCodeAt(position) !== 123) continue;
     if (text.charCodeAt(position + 1) !== 123) continue;
-    const closing = text.indexOf("}}", position + 2);
+    const closing = findInterpolationEnd(text, position + 2);
     if (closing < 0) break;
     ranges.push({ from: position + 2, to: closing });
     position = closing + 1;
