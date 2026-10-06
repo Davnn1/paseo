@@ -73,27 +73,6 @@ function skipRegex(text: string, opening: number): number {
   return text.length - 1;
 }
 
-function findClosingBrace(text: string, opening: number): number {
-  let depth = 0;
-  for (let position = opening; position < text.length; position++) {
-    const code = text.charCodeAt(position);
-    if (code === 47 && text.charCodeAt(position + 1) === 47) {
-      position = skipLineComment(text, position);
-    } else if (code === 47 && text.charCodeAt(position + 1) === 42) {
-      position = skipBlockComment(text, position);
-    } else if (code === 47 && isRegexStart(text, position)) {
-      position = skipRegex(text, position);
-    } else if (code === 34 || code === 39 || code === 96) {
-      position = skipQuotedText(text, position);
-    } else if (code === 123) {
-      depth++;
-    } else if (code === 125 && --depth === 0) {
-      return position;
-    }
-  }
-  return -1;
-}
-
 function findInterpolationEnd(text: string, start: number): number {
   let depth = 0;
   for (let position = start; position < text.length; position++) {
@@ -155,73 +134,72 @@ function getOpenTagAttributes(node: SyntaxNode, input: Input): Record<string, st
   return attributes;
 }
 
+function isDirectiveAttribute(attribute: string): boolean {
+  return (
+    attribute.startsWith("v-") ||
+    attribute.startsWith(":") ||
+    attribute.startsWith("@") ||
+    attribute.startsWith(".")
+  );
+}
+
+function directiveOverlay(
+  node: SyntaxNodeRef,
+  parent: SyntaxNode,
+  input: Input,
+): NestedParse | null {
+  const attributeName = parent.getChild("AttributeName");
+  if (!attributeName) return null;
+  if (!isDirectiveAttribute(input.read(attributeName.from, attributeName.to).toLowerCase())) {
+    return null;
+  }
+
+  const range = findDirectiveExpression(input.read(node.from, node.to));
+  if (!range) return null;
+  return {
+    parser: expressionParser,
+    overlay: [{ from: node.from + range.from, to: node.from + range.to }],
+  };
+}
+
+function textOverlay(node: SyntaxNodeRef, input: Input): NestedParse | null {
+  const overlays = findExpressions(input.read(node.from, node.to)).map(({ from, to }) => ({
+    from: node.from + from,
+    to: node.from + to,
+  }));
+  return overlays.length > 0 ? { parser: expressionParser, overlay: overlays } : null;
+}
+
+function templateOverlay(node: SyntaxNodeRef, input: Input): NestedParse | null {
+  const parent = node.node.parent;
+  if (parent?.name === "Attribute") return directiveOverlay(node, parent, input);
+  if (node.name !== "Text") return null;
+  return textOverlay(node, input);
+}
+
+function scriptLanguage(attributes: Record<string, string>): NestedParse | null {
+  if (attributes.src) return null;
+
+  const language = (attributes.lang || attributes.type || "").toLowerCase();
+  if (language.includes("tsx")) return { parser: jsParser.configure({ dialect: "ts jsx" }) };
+  if (language.includes("typescript") || language === "ts") return { parser: typescriptParser };
+  if (language.includes("jsx")) return { parser: jsParser.configure({ dialect: "jsx" }) };
+  return { parser: jsParser };
+}
+
+function scriptOverlay(node: SyntaxNodeRef, input: Input): NestedParse | null {
+  const parent = node.node.parent;
+  if (!parent) return null;
+  return scriptLanguage(getOpenTagAttributes(parent, input));
+}
+
 function nestedLanguage(node: SyntaxNodeRef, input: Input): NestedParse | null {
-  const canContainTemplateExpression =
-    node.name === "Text" ||
-    node.name === "UnquotedAttributeValue" ||
-    node.name === "AttributeValue";
-
-  if (canContainTemplateExpression) {
-    const parent = node.node.parent;
-    const parentName = parent?.name ?? "";
-
-    if (parentName === "Attribute") {
-      const attributeName = parent?.getChild("AttributeName");
-      if (attributeName) {
-        const attr = input.read(attributeName.from, attributeName.to).toLowerCase();
-        const isDirective =
-          attr.startsWith("v-") ||
-          attr.startsWith(":") ||
-          attr.startsWith("@") ||
-          attr.startsWith(".");
-        if (isDirective) {
-          const text = input.read(node.from, node.to);
-          const range = findDirectiveExpression(text);
-          if (range) {
-            return {
-              parser: expressionParser,
-              overlay: [{ from: node.from + range.from, to: node.from + range.to }],
-            };
-          }
-          return null;
-        }
-      }
-      return null;
-    }
-
-    if (node.name === "Text") {
-      const text = input.read(node.from, node.to);
-      const overlays = findExpressions(text).map(({ from, to }) => ({
-        from: node.from + from,
-        to: node.from + to,
-      }));
-      if (overlays.length > 0) {
-        return { parser: expressionParser, overlay: overlays };
-      }
-      return null;
-    }
+  const name = node.name;
+  if (name === "Text" || name === "UnquotedAttributeValue" || name === "AttributeValue") {
+    return templateOverlay(node, input);
   }
-
-  if (node.name === "StyleText") return { parser: cssParser };
-
-  if (node.name === "ScriptText") {
-    if (!node.node.parent) return null;
-    const attributes = getOpenTagAttributes(node.node.parent, input);
-    if (attributes.src) return null;
-
-    const language = (attributes.lang || attributes.type || "").toLowerCase();
-    if (language.includes("tsx")) {
-      return { parser: jsParser.configure({ dialect: "ts jsx" }) };
-    }
-    if (language.includes("typescript") || language === "ts") {
-      return { parser: typescriptParser };
-    }
-    if (language.includes("jsx")) {
-      return { parser: jsParser.configure({ dialect: "jsx" }) };
-    }
-    return { parser: jsParser };
-  }
-
+  if (name === "StyleText") return { parser: cssParser };
+  if (name === "ScriptText") return scriptOverlay(node, input);
   return null;
 }
 
