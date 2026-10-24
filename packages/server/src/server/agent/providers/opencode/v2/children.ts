@@ -9,6 +9,8 @@ import type { ProviderSubagentInputEvent } from "../../../provider-subagents/sto
 import { messages } from "./history.js";
 
 import type { V2Api } from "./api.js";
+
+import { buildOpenCodeSubagentSubtitle } from "../subagent-presentation.js";
 interface ChildrenOptions {
   client(): V2Api;
   id: string;
@@ -65,6 +67,12 @@ export class SessionChildren {
     if (active[info.id]) status = "running";
     else if (info.outcome === "failed") status = "failed";
     else if (info.outcome === "interrupted") status = "canceled";
+    const subtitle = buildOpenCodeSubagentSubtitle({
+      agentName: info.agent,
+      modelId: info.model?.id,
+      variant: info.model?.variant,
+      totalTokens: sumTokens(info.tokens),
+    });
     const presentation: ProviderSubagentInputEvent = {
       type: "upsert",
       id: info.id,
@@ -73,6 +81,7 @@ export class SessionChildren {
       status,
       cwd: info.location.directory,
       timestamp: new Date(info.time.updated).toISOString(),
+      ...(subtitle ? { subtitle } : {}),
     };
     const signature = JSON.stringify(presentation);
     if (this.childStates.get(info.id) !== signature) {
@@ -88,4 +97,11 @@ export class SessionChildren {
         });
     }
   }
+}
+
+/** Session token counters are cumulative; the subtitle only needs a non-empty total. */
+function sumTokens(tokens: SessionInfo["tokens"]): number | undefined {
+  const total =
+    tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write;
+  return total > 0 ? total : undefined;
 }
